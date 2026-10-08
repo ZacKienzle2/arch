@@ -483,7 +483,9 @@ def _estimate_df_regression(
     if trend != "n":
         rhs = add_trend(rhs.iloc[:, : lags + 1], trend)
 
-    return OLS(lhs, rhs).fit()
+    # The trend fixes whether rhs has a constant, so statsmodels' search for
+    # an implicit one, two SVDs of rhs when trend is "n", is skipped
+    return OLS(lhs, rhs, hasconst=trend != "n").fit()
 
 
 class UnitRootTest(metaclass=ABCMeta):
