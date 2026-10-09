@@ -1503,7 +1503,9 @@ class KPSS(UnitRootTest, metaclass=AbstractDocStringInheritor):
             resids_prod /= nobs / 2
             s0 += resids_prod
             s1 += i * resids_prod
-        if s0 <= 0:
+        # Newey and West (1994, Section 3) square s1 / s0 before the root, so the
+        # bandwidth is defined for a negative pilot estimate s0 and not for zero.
+        if s0 == 0:
             raise InfeasibleTestException(
                 "Residuals are all zero and so automatic bandwidth selection cannot "
                 "be used. This is usually an indication that the series being testes "
