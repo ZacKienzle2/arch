@@ -283,3 +283,11 @@ def test_center(data: ArrayLike, estimator: type[CovarianceEstimator]):
     centered_cov = estimator(data, center=False, force_int=False)
     cov = estimator(data, force_int=False)
     assert centered_cov.bandwidth != cov.bandwidth
+
+
+def test_alpha_q_follows_errstate():
+    # A constant series has a zero autocovariance sum. The bandwidth's ratio is
+    # computed with NumPy scalars, so np.errstate governs it rather than Python
+    # raising ZeroDivisionError.
+    with np.errstate(all="raise"), pytest.raises(FloatingPointError):
+        Bartlett(np.zeros(100)).opt_bandwidth

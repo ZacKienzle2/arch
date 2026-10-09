@@ -335,14 +335,17 @@ class CovarianceEstimator(ABC):
         v = self._x @ self._x_weights
         nobs = v.shape[0]
         n = int(np.ceil(4 * ((nobs / 100) ** self.rate)))
-        f_0s = 0.0
-        f_qs = 0.0
+        f_0s = np.float64(0.0)
+        f_qs = np.float64(0.0)
         for j in range(n + 1):
-            sig_j = float(np.squeeze(v[j:].T @ v[: (nobs - j)])) / nobs
+            sig_j = np.float64(np.squeeze(v[j:].T @ v[: (nobs - j)])) / nobs
             scale = 1 + (j != 0)
             f_0s += scale * sig_j
             f_qs += scale * j**q * sig_j
-        return (f_qs / f_0s) ** 2
+        # NumPy scalars follow np.errstate, so a zero or vanishing autocovariance
+        # sum gives inf or nan (or the caller's FloatingPointError) instead of
+        # Python's ZeroDivisionError or OverflowError.
+        return float((f_qs / f_0s) ** 2)
 
     @cached_property
     def opt_bandwidth(self) -> float:
