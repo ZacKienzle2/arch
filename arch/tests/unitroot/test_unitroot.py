@@ -499,6 +499,15 @@ def test_adf_buggy_timeseries1():
         assert np.isfinite(adf.stat)
 
 
+def test_kpss_negative_pilot():
+    # 200 observations give 3 pilot lags, whose truncated sum of the
+    # autocovariances of an alternating series is negative
+    x = (-1.0) ** np.arange(200)
+    kpss = KPSS(x, trend="c")
+    assert kpss.lags >= 0
+    assert np.isfinite(kpss.stat)
+
+
 def test_adf_buggy_timeseries2():
     x = np.asarray([0, 0])
     adf = ADF(x)
