@@ -545,6 +545,7 @@ def test_adf_buggy_timeseries1():
         assert np.isfinite(adf.stat)
 
 
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
 def test_kpss_negative_pilot():
     # 200 observations give 3 pilot lags, whose truncated sum of the
     # autocovariances of an alternating series is negative
