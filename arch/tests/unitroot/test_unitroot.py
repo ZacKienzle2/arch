@@ -416,6 +416,32 @@ def test_trends_low_memory(trend):
 
 
 @pytest.mark.parametrize("trend", ["n", "c", "ct", "ctt"])
+def test_adf_statistic_low_memory(trend):
+    rnd = np.random.RandomState(12345)
+    y = np.cumsum(rnd.standard_normal(250))
+    adf = ADF(y, trend=trend, max_lags=16, low_memory=False)
+    adf_lm = ADF(y, trend=trend, max_lags=16, low_memory=True)
+    assert adf.lags == adf_lm.lags
+    assert adf.nobs == adf_lm.nobs
+    assert_allclose(adf_lm.stat, adf.stat)
+    assert_allclose(adf_lm.pvalue, adf.pvalue)
+    assert_allclose(adf_lm.regression.tvalues, adf.regression.tvalues)
+
+
+@pytest.mark.parametrize("trend", ["c", "ct"])
+def test_dfgls_statistic_low_memory(trend):
+    rnd = np.random.RandomState(12345)
+    y = np.cumsum(rnd.standard_normal(250))
+    dfgls = DFGLS(y, trend=trend, max_lags=16, low_memory=False)
+    dfgls_lm = DFGLS(y, trend=trend, max_lags=16, low_memory=True)
+    assert dfgls.lags == dfgls_lm.lags
+    assert dfgls.nobs == dfgls_lm.nobs
+    assert_allclose(dfgls_lm.stat, dfgls.stat)
+    assert_allclose(dfgls_lm.pvalue, dfgls.pvalue)
+    assert_allclose(dfgls_lm.regression.tvalues, dfgls.regression.tvalues)
+
+
+@pytest.mark.parametrize("trend", ["n", "c", "ct", "ctt"])
 def test_representations(trend):
     rnd = np.random.RandomState(12345)
     y = np.cumsum(rnd.standard_normal(250))

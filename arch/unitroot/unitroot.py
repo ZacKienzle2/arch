@@ -487,6 +487,68 @@ def _estimate_df_regression(
     return OLS(lhs, rhs).fit()
 
 
+def _estimate_df_statistic_low_memory(
+    y: Float64Array, trend: UnitRootTrend, lags: int
+) -> tuple[float, int]:
+    """
+    Compute the t-statistic of the level in the (A)DF regression
+
+    Parameters
+    ----------
+    y : ndarray
+        The data for the regression
+    trend : {"n", "c", "ct", "ctt"}
+        The trend order
+    lags : int
+        The number of lags to include in the ADF regression
+
+    Returns
+    -------
+    stat : float
+        The t-statistic of the coefficient on the lagged level
+    nobs : int
+        The number of observations in the regression
+
+    Notes
+    -----
+    Uses the cross-products of the regressors, built column by column as in
+    the low-memory lag search, so that the regressor matrix is never formed.
+    The level, the differences and the trend terms are rescaled as in that
+    search, which leaves the t-statistic unchanged.
+    """
+    y = asarray(y)
+    deltay = diff(y)
+    deltay = deltay / sqrt(deltay @ deltay)
+    lhs = deltay[lags:]
+    level = y[lags:-1]
+    level = level / sqrt(level @ level)
+    nobs = lhs.shape[0]
+    columns = [level]
+    columns.extend(deltay[lags - i - 1 : -(1 + i)] for i in range(lags))
+    if trend.startswith("c"):
+        columns.append(ones(nobs) / sqrt(nobs))
+    if "t" in trend:
+        columns.append(arange(1, nobs + 1, dtype=float64) * sqrt(3) / nobs**1.5)
+    if "tt" in trend:
+        columns.append(arange(1, nobs + 1, dtype=float64) ** 2 * sqrt(5) / nobs**2.5)
+    k = len(columns)
+    xpx = empty((k, k))
+    xpy = empty(k)
+    for i, x1 in enumerate(columns):
+        xpy[i] = x1 @ lhs
+        for j in range(i, k):
+            xpx[i, j] = xpx[j, i] = x1 @ columns[j]
+    try:
+        b = solve(xpx, xpy)
+    except LinAlgError as exc:
+        raise InfeasibleTestException(
+            singular_array_error.format(max_lags=lags, lag=lags)
+        ) from exc
+    scale = (lhs @ lhs - b @ xpy) / (nobs - k)
+    stat = float(b[0] / sqrt(scale * inv(xpx)[0, 0]))
+    return stat, int(nobs)
+
+
 class UnitRootTest(metaclass=ABCMeta):
     """Base class to be used for inheritance in unit root bootstrap"""
 
@@ -804,10 +866,16 @@ class ADF(UnitRootTest, metaclass=AbstractDocStringInheritor):
             self._select_lag()
         assert self._lags is not None
         y, trend, lags = self._y, self._trend, self._lags
-        resols = _estimate_df_regression(y, cast("UnitRootTrend", trend), lags)
-        self._regression = resols
-        self._stat, *_ = (stat, *_) = resols.tvalues
-        self._nobs = int(resols.nobs)
+        if self._low_memory:
+            stat, self._nobs = _estimate_df_statistic_low_memory(
+                y, cast("UnitRootTrend", trend), lags
+            )
+            self._stat = stat
+        else:
+            resols = _estimate_df_regression(y, cast("UnitRootTrend", trend), lags)
+            self._regression = resols
+            self._stat, *_ = (stat, *_) = resols.tvalues
+            self._nobs = int(resols.nobs)
         self._pvalue = mackinnonp(
             stat,
             regression=cast("Literal['n', 'c', 'ct', 'ctt']", trend),
@@ -816,7 +884,7 @@ class ADF(UnitRootTest, metaclass=AbstractDocStringInheritor):
         critical_values = mackinnoncrit(
             num_unit_roots=1,
             regression=cast("Literal['n', 'c', 'ct', 'ctt']", trend),
-            nobs=resols.nobs,
+            nobs=self._nobs,
         )
         self._critical_values = {
             "1%": critical_values[0],
@@ -828,6 +896,11 @@ class ADF(UnitRootTest, metaclass=AbstractDocStringInheritor):
     def regression(self) -> RegressionResults:
         """Returns the OLS regression results from the ADF model estimated"""
         self._compute_if_needed()
+        if self._regression is None:
+            assert self._lags is not None
+            self._regression = _estimate_df_regression(
+                self._y, cast("UnitRootTrend", self._trend), self._lags
+            )
         return self._regression
 
     @property
@@ -973,10 +1046,16 @@ class DFGLS(UnitRootTest, metaclass=AbstractDocStringInheritor):
         # 3. Run Regression
         lags = self._lags
 
-        resols = _estimate_df_regression(y_detrended, lags=lags, trend="n")
-        self._regression = resols
-        self._nobs = int(resols.nobs)
-        self._stat, *_ = resols.tvalues
+        self._y_detrended = y_detrended
+        if self._low_memory:
+            self._stat, self._nobs = _estimate_df_statistic_low_memory(
+                y_detrended, "n", lags
+            )
+        else:
+            resols = _estimate_df_regression(y_detrended, lags=lags, trend="n")
+            self._regression = resols
+            self._nobs = int(resols.nobs)
+            self._stat, *_ = resols.tvalues
         assert self._stat is not None
         self._pvalue = mackinnonp(
             self._stat, regression=cast("Literal['c', 'ct']", trend), dist_type="dfgls"
@@ -1000,6 +1079,11 @@ class DFGLS(UnitRootTest, metaclass=AbstractDocStringInheritor):
     def regression(self) -> RegressionResults:
         """Returns the OLS regression results from the ADF model estimated"""
         self._compute_if_needed()
+        if self._regression is None:
+            assert self._lags is not None
+            self._regression = _estimate_df_regression(
+                self._y_detrended, lags=self._lags, trend="n"
+            )
         return self._regression
 
     @property
