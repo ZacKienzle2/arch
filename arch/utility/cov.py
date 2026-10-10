@@ -1,4 +1,6 @@
-from numpy import asarray, squeeze
+from numpy import arange, asarray, log2, squeeze
+from numpy.fft import irfft, rfft
+from scipy.fft import next_fast_len
 
 from arch._typing import Float64Array
 
@@ -29,6 +31,15 @@ def cov_nw(
     -------
     ndarray
         The estimated covariance
+
+    Notes
+    -----
+    Summing one product over the sample for each lag costs ``n * lags``. For
+    1-d data, the autocovariances of every lag come instead from the inverse
+    FFT of the periodogram of the data zero-padded to at least ``n + lags``,
+    so the circular correlation does not wrap at the lags used, which costs
+    in the order of ``m log2(m)`` for padded length ``m``. The cheaper of
+    the two is used.
     """
     z = y
     is_1d = False
@@ -50,6 +61,12 @@ def cov_nw(
 
     if demean:
         z = z - z.mean(0)
+    size = next_fast_len(n + lags)
+    if is_1d and lags * n > size * log2(size):
+        spectrum = rfft(z[:, 0], size)
+        gammas = irfft(spectrum.real**2 + spectrum.imag**2, size)[: lags + 1]
+        weights = 1 - arange(lags + 1) / (lags + 1)
+        return float((2 * weights @ gammas - gammas[0]) / (n - ddof))
     cov = z.T.dot(z)
     for j in range(1, lags + 1):
         w = 1 - j / (lags + 1)
