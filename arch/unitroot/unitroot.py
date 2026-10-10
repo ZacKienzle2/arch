@@ -613,9 +613,10 @@ def _estimate_df_statistic_low_memory(
     k = len(columns)
     xpx = empty((k, k))
     xpy = empty(k)
+    xpx[1 : lags + 1, 1 : lags + 1] = _lag_cross_products(deltay, lags)
     for i, x1 in enumerate(columns):
         xpy[i] = x1 @ lhs
-        for j in range(i, k):
+        for j in range(lags + 1 if 1 <= i <= lags else i, k):
             xpx[i, j] = xpx[j, i] = x1 @ columns[j]
     try:
         b = solve(xpx, xpy)
