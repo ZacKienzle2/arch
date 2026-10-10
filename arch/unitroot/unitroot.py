@@ -222,6 +222,47 @@ maximum lag length to consider smaller models.\
 """
 
 
+def _lag_cross_products(deltay: Float64Array, lags: int) -> Float64Array:
+    """
+    Cross-products of the lagged differences in the (A)DF regression
+
+    Parameters
+    ----------
+    deltay : ndarray
+        The differences of the data
+    lags : int
+        The number of lagged differences
+
+    Returns
+    -------
+    xpx : ndarray
+        The lags by lags cross-products, where lag i is
+        ``deltay[lags - i - 1 : -(1 + i)]``
+
+    Notes
+    -----
+    Each lag is the differences over a window of the same length that starts
+    one place earlier than the window of the lag before it, so along the
+    diagonal j = i + h the window of the product moves back one place: one
+    term enters and one leaves. Each diagonal costs one product over the
+    sample rather than one per element.
+    """
+    nobs = deltay.shape[0] - lags
+    xpx = empty((lags, lags))
+    for h in range(lags):
+        count = lags - h
+        start = count - 1
+        first = deltay[start : start + nobs] @ deltay[start + h : start + h + nobs]
+        entering = deltay[:start] * deltay[h : start + h]
+        leaving = deltay[nobs : start + nobs] * deltay[nobs + h : start + nobs + h]
+        diagonal = full(count, first)
+        diagonal[1:] += cumsum((entering - leaving)[::-1])
+        index = arange(count)
+        xpx[index, index + h] = diagonal
+        xpx[index + h, index] = diagonal
+    return xpx
+
+
 def _autolag_ols_low_memory(
     y: Float64Array,
     maxlag: int,
@@ -290,21 +331,7 @@ def _autolag_ols_low_memory(
         xpx[m + i, :m] = block
         xpx[:m, m + i] = block
         xpy[m + i] = x1 @ lhs
-    # Lag i is deltay over a window that starts maxlag - i - 1 and has nobs
-    # elements, so along the diagonal j = i + h the window of each product
-    # moves back one place: one term enters and one leaves. Each diagonal
-    # costs one product over nobs elements rather than one per element.
-    for h in range(maxlag):
-        count = maxlag - h
-        start = count - 1
-        first = deltay[start : start + nobs] @ deltay[start + h : start + h + nobs]
-        entering = deltay[:start] * deltay[h : start + h]
-        leaving = deltay[nobs : start + nobs] * deltay[nobs + h : start + nobs + h]
-        diagonal = full(count, first)
-        diagonal[1:] += cumsum((entering - leaving)[::-1])
-        index = m + arange(count)
-        xpx[index, index + h] = diagonal
-        xpx[index + h, index] = diagonal
+    xpx[m:, m:] = _lag_cross_products(deltay, maxlag)
     ypy = lhs.T @ lhs
     sigma2 = empty(maxlag + 1)
     # The level is the first column and the trend terms follow it
