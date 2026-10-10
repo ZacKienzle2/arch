@@ -267,11 +267,21 @@ def _autolag_ols_low_memory(
         xpx[m + i, :m] = block
         xpx[:m, m + i] = block
         xpy[m + i] = x1 @ lhs
-        for j in range(i, maxlag):
-            x2 = deltay[maxlag - j - 1 : -(1 + j)]
-            x1px2 = x1 @ x2
-            xpx[m + i, m + j] = x1px2
-            xpx[m + j, m + i] = x1px2
+    # Lag i is deltay over a window that starts maxlag - i - 1 and has nobs
+    # elements, so along the diagonal j = i + h the window of each product
+    # moves back one place: one term enters and one leaves. Each diagonal
+    # costs one product over nobs elements rather than one per element.
+    for h in range(maxlag):
+        count = maxlag - h
+        start = count - 1
+        first = deltay[start : start + nobs] @ deltay[start + h : start + h + nobs]
+        entering = deltay[:start] * deltay[h : start + h]
+        leaving = deltay[nobs : start + nobs] * deltay[nobs + h : start + nobs + h]
+        diagonal = full(count, first)
+        diagonal[1:] += cumsum((entering - leaving)[::-1])
+        index = m + arange(count)
+        xpx[index, index + h] = diagonal
+        xpx[index + h, index] = diagonal
     ypy = lhs.T @ lhs
     sigma2 = empty(maxlag + 1)
 
