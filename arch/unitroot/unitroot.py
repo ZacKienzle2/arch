@@ -42,6 +42,7 @@ from numpy.fft import irfft, rfft
 from numpy.linalg import LinAlgError, inv, lstsq, matrix_rank, pinv, qr, solve
 from pandas import DataFrame
 from scipy.fft import next_fast_len
+from scipy.signal import zoom_fft
 from scipy.stats import norm
 from statsmodels.iolib.summary import Summary
 from statsmodels.iolib.table import SimpleTable
@@ -1725,9 +1726,11 @@ class BaileyGiraitis(UnitRootTest, metaclass=AbstractDocStringInheritor):
         first, last, low, high = self._frequencies
         top = max(last, high) + 1
         # The periodogram's modulus is unchanged by the sign and the origin of
-        # the transform's exponent, so rfft's coefficients give I(u_j)
-        levels = np.abs(rfft(y[1:])[:top]) ** 2
-        changes = np.abs(rfft(diff(y))[:top]) ** 2
+        # the transform's exponent, so the DFT's first top coefficients give
+        # I(u_j). zoom_fft computes the DFT at those bins alone by the chirp
+        # z-transform (scipy.signal.zoom_fft; Rabiner, Schafer and Rader 1969)
+        levels = np.abs(zoom_fft(y[1:], [0, top], top, fs=nobs)) ** 2
+        changes = np.abs(zoom_fft(diff(y), [0, top], top, fs=nobs)) ** 2
         self._stat = float(
             nobs**2
             / (2 * pi) ** 2
