@@ -14,6 +14,7 @@ from numpy import (
     array,
     asarray,
     ceil,
+    column_stack,
     cumsum,
     diag,
     diff,
@@ -23,6 +24,7 @@ from numpy import (
     hstack,
     inf,
     interp,
+    ix_,
     isnan,
     log,
     log2,
@@ -670,21 +672,27 @@ def _estimate_df_statistic_low_memory(
     level = level / sqrt(level @ level)
     nobs = lhs.shape[0]
     columns = [level]
-    columns.extend(deltay[lags - i - 1 : -(1 + i)] for i in range(lags))
     if trend.startswith("c"):
         columns.append(ones(nobs) / sqrt(nobs))
     if "t" in trend:
         columns.append(arange(1, nobs + 1, dtype=float64) * sqrt(3) / nobs**1.5)
     if "tt" in trend:
         columns.append(arange(1, nobs + 1, dtype=float64) ** 2 * sqrt(5) / nobs**2.5)
-    k = len(columns)
+    others = column_stack(columns)
+    k = lags + len(columns)
+    # The level is column 0, lag i is column i + 1, deltay[lags - i - 1 :
+    # -(1 + i)], and the trend terms follow the lags
+    fixed = [0, *range(lags + 1, k)]
+    shifts = lags - 1 - arange(lags)
+    crossed = _correlations(column_stack([others, lhs]), deltay, lags)[:, shifts]
     xpx = empty((k, k))
     xpy = empty(k)
     xpx[1 : lags + 1, 1 : lags + 1] = _lag_cross_products(deltay, lags)
-    for i, x1 in enumerate(columns):
-        xpy[i] = x1 @ lhs
-        for j in range(lags + 1 if 1 <= i <= lags else i, k):
-            xpx[i, j] = xpx[j, i] = x1 @ columns[j]
+    xpx[ix_(fixed, fixed)] = others.T @ others
+    xpx[ix_(fixed, range(1, lags + 1))] = crossed[:-1]
+    xpx[ix_(range(1, lags + 1), fixed)] = crossed[:-1].T
+    xpy[fixed] = others.T @ lhs
+    xpy[1 : lags + 1] = crossed[-1]
     try:
         b = solve(xpx, xpy)
     except LinAlgError as exc:
