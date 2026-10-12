@@ -25,6 +25,7 @@ from numpy import (
     interp,
     isnan,
     log,
+    log2,
     nan,
     ndarray,
     ones,
@@ -35,8 +36,10 @@ from numpy import (
     sqrt,
     squeeze,
 )
+from numpy.fft import irfft, rfft
 from numpy.linalg import LinAlgError, inv, lstsq, matrix_rank, pinv, qr, solve
 from pandas import DataFrame
+from scipy.fft import next_fast_len
 from scipy.stats import norm
 from statsmodels.iolib.summary import Summary
 from statsmodels.iolib.table import SimpleTable
@@ -222,6 +225,51 @@ maximum lag length to consider smaller models.\
 """
 
 
+def _correlations(
+    columns: Float64Array, deltay: Float64Array, count: int
+) -> Float64Array:
+    """
+    Products of columns with the differences shifted forward by 0 to count - 1
+
+    Parameters
+    ----------
+    columns : ndarray
+        The nobs by m columns
+    deltay : ndarray
+        The differences, at least nobs + count - 1 long
+    count : int
+        The number of shifts
+
+    Returns
+    -------
+    products : ndarray
+        The m by count products, where shift k is
+        ``columns.T @ deltay[k : k + nobs]``
+
+    Notes
+    -----
+    Summing one product over the sample for each shift costs ``nobs * count``
+    for each column. The cross-correlations at every shift come instead from
+    the inverse FFT of the product of the conjugate transform of the columns
+    and the transform of the differences, zero-padded to at least the length
+    of the differences, so the circular correlation does not wrap at the
+    shifts used, in the order of ``s log2(s)`` for padded length ``s``. The
+    cheaper of the two is used, as in ``cov_nw``.
+    """
+    nobs = columns.shape[0]
+    size = next_fast_len(deltay.shape[0])
+    if count * nobs <= size * log2(size):
+        return (
+            array([columns.T @ deltay[k : k + nobs] for k in range(count)])
+            .reshape(count, columns.shape[1])
+            .T
+        )
+    spectrum = rfft(deltay, size)
+    return irfft(
+        rfft(columns, size, axis=0).conj() * spectrum[:, None], size, axis=0
+    )[:count].T
+
+
 def _lag_cross_products(deltay: Float64Array, lags: int) -> Float64Array:
     """
     Cross-products of the lagged differences in the (A)DF regression
@@ -244,17 +292,20 @@ def _lag_cross_products(deltay: Float64Array, lags: int) -> Float64Array:
     Each lag is the differences over a window of the same length that starts
     one place earlier than the window of the lag before it, so along the
     diagonal j = i + h the window of the product moves back one place: one
-    term enters and one leaves. Each diagonal costs one product over the
-    sample rather than one per element.
+    term enters and one leaves. The first element of each diagonal is the
+    product at lag h over the first nobs differences, from `_correlations`,
+    with its window moved forward by start places: the leaving terms added and
+    the entering terms taken away.
     """
     nobs = deltay.shape[0] - lags
     xpx = empty((lags, lags))
+    sums = _correlations(deltay[:nobs, None], deltay, lags)[0]
     for h in range(lags):
         count = lags - h
         start = count - 1
-        first = deltay[start : start + nobs] @ deltay[start + h : start + h + nobs]
         entering = deltay[:start] * deltay[h : start + h]
         leaving = deltay[nobs : start + nobs] * deltay[nobs + h : start + nobs + h]
+        first = sums[h] + leaving.sum() - entering.sum()
         diagonal = full(count, first)
         diagonal[1:] += cumsum((entering - leaving)[::-1])
         index = arange(count)
@@ -325,13 +376,29 @@ def _autolag_ols_low_memory(
     assert isinstance(xpy, ndarray)
     xpy[:m] = rhs.T @ lhs
     xpx[:m, :m] = rhs.T @ rhs
+    # Lag i is deltay[maxlag - i - 1 : -(1 + i)], the differences shifted
+    # forward by maxlag - i - 1 against the regressors and by maxlag against lhs
+    crossed = _correlations(hstack([rhs, lhs]), deltay, maxlag)
     for i in range(maxlag):
-        x1 = deltay[maxlag - i - 1 : -(1 + i)]
-        block = rhs.T @ x1
+        block = crossed[:m, maxlag - i - 1]
         xpx[m + i, :m] = block
         xpx[:m, m + i] = block
-        xpy[m + i] = x1 @ lhs
+    xpy[m:, 0] = crossed[m, ::-1]
     xpx[m:, m:] = _lag_cross_products(deltay, maxlag)
+    # FFT sums carry rounding where direct sums of zeros are exactly zero, so
+    # solve no longer fails on a singular block. Rank is judged as the
+    # full-memory search judges it, by matrix_rank's default tolerance. Every
+    # leading block of a positive definite matrix is positive definite, so
+    # the first deficient block is searched only when the whole is deficient.
+    if matrix_rank(xpx, hermitian=True) < xpx.shape[0]:
+        i = next(
+            i
+            for i in range(m, m + maxlag + 1)
+            if matrix_rank(xpx[:i, :i], hermitian=True) < i
+        )
+        raise InfeasibleTestException(
+            singular_array_error.format(max_lags=maxlag, lag=m - i)
+        )
     ypy = lhs.T @ lhs
     sigma2 = empty(maxlag + 1)
     # The level is the first column and the trend terms follow it
