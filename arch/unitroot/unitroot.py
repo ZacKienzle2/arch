@@ -58,6 +58,9 @@ from arch._typing import (
     Literal,
     UnitRootTrend,
 )
+from arch.unitroot.critical_values.bailey_giraitis import (
+    bailey_giraitis_critical_values,
+)
 from arch.unitroot.critical_values.dfgls import (
     dfgls_cv_approx,
     dfgls_large_p,
@@ -103,6 +106,7 @@ __all__ = [
     "KPSS",
     "SHORT_TREND_DESCRIPTION",
     "TREND_DESCRIPTION",
+    "BaileyGiraitis",
     "PhillipsPerron",
     "VarianceRatio",
     "ZivotAndrews",
@@ -267,9 +271,9 @@ def _correlations(
             .T
         )
     spectrum = rfft(deltay, size)
-    return irfft(
-        rfft(columns, size, axis=0).conj() * spectrum[:, None], size, axis=0
-    )[:count].T
+    return irfft(rfft(columns, size, axis=0).conj() * spectrum[:, None], size, axis=0)[
+        :count
+    ].T
 
 
 def _lag_cross_products(deltay: Float64Array, lags: int) -> Float64Array:
@@ -1629,6 +1633,116 @@ class KPSS(UnitRootTest, metaclass=AbstractDocStringInheritor):
         gamma_hat = 1.1447 * power(s_hat * s_hat, pwr)
         autolags = amin([self._nobs, int(gamma_hat * power(self._nobs, pwr))])
         self._lags = int(autolags)
+
+
+class BaileyGiraitis(UnitRootTest, metaclass=AbstractDocStringInheritor):
+    """
+    Bailey and Giraitis' low-frequency periodogram unit root test
+
+    Parameters
+    ----------
+    y : {ndarray, Series}
+        The data to test for a unit root, y[0], ..., y[n]
+    trend : {"c", "ct"}, optional
+        The trend component of the test
+
+        - "c" - A unit root without drift against a stationary process with
+          a mean (Default)
+        - "ct" - A unit root with drift against a stationary process around a
+          linear trend, with the trend's slope removed by OLS
+
+    frequencies : tuple[int, int, int, int], optional
+        (l, k, p, q): the numerator sums the periodogram of the differences at
+        Fourier frequencies l to k, and the denominator that of the levels at
+        p to q. Critical values are tabulated for (3, 10, 1, 2), the default,
+        (3, 8, 1, 3) and (3, 7, 1, 4).
+
+    Notes
+    -----
+    The null hypothesis is a unit root, possibly observed with an additive
+    stationary noise, y_j = x_j + e_j with x_j = x_{j-1} + xi_j, where xi and
+    e are linear short memory processes. The alternative is stationarity.
+    The statistic is ([bg]_, Section 2)
+
+    .. math::
+
+        Q = \\frac{n^2}{(2\\pi)^2}
+            \\frac{\\sum_{j=l}^{k} I_{\\nabla Y}(u_j)}{\\sum_{j=p}^{q} I_Y(u_j)}
+
+    where I is the periodogram at the Fourier frequency u_j = 2 pi j / n. Its
+    null limit depends only on the frequencies and the trend (Theorems 1 and
+    2), so no lag length, bandwidth or other model of the short-run dynamics
+    is chosen. Large values reject the null.
+
+    The p-values and critical values are interpolated from quantiles of the
+    limit distributions (16) and (18), each simulated with 100,000,000
+    draws.
+
+    References
+    ----------
+    .. [bg] Bailey, N., & Giraitis, L. (2016). "Spectral approach to
+       parameter-free unit root testing". Computational Statistics & Data
+       Analysis, 100, 4-16.
+    """
+
+    def __init__(
+        self,
+        y: ArrayLike,
+        trend: Literal["c", "ct"] = "c",
+        frequencies: tuple[int, int, int, int] = (3, 10, 1, 2),
+    ) -> None:
+        super().__init__(y, None, trend, ("c", "ct"))
+        if (trend, frequencies) not in bailey_giraitis_critical_values:
+            raise ValueError(
+                "frequencies must be one of "
+                f"{sorted({f for _, f in bailey_giraitis_critical_values})}"
+            )
+        self._frequencies = frequencies
+        self._test_name = "Bailey-Giraitis Q Unit Root Test"
+
+    @property
+    def frequencies(self) -> tuple[int, int, int, int]:
+        """The Fourier frequencies (l, k, p, q) of the statistic"""
+        return self._frequencies
+
+    def _check_specification(self) -> None:
+        required = 2 * max(self._frequencies) + 2
+        if self._y.shape[0] < required:
+            raise InfeasibleTestException(
+                f"A minimum of {required} observations are needed to use the "
+                f"Fourier frequencies up to {max(self._frequencies)}."
+            )
+
+    def _compute_statistic(self) -> None:
+        y = self._y
+        nobs = y.shape[0] - 1
+        steps = arange(nobs + 1, dtype=float64)
+        if self._trend == "ct":
+            # (6): the slope by OLS, and the residuals y_j - beta j
+            centered = steps[1:] - steps[1:].mean()
+            beta = centered @ (y[1:] - y[1:].mean()) / (centered @ centered)
+            y = y - beta * steps
+        first, last, low, high = self._frequencies
+        top = max(last, high) + 1
+        # The periodogram's modulus is unchanged by the sign and the origin of
+        # the transform's exponent, so rfft's coefficients give I(u_j)
+        levels = np.abs(rfft(y[1:])[:top]) ** 2
+        changes = np.abs(rfft(diff(y))[:top]) ** 2
+        self._stat = float(
+            nobs**2
+            / (2 * pi) ** 2
+            * changes[first : last + 1].sum()
+            / levels[low : high + 1].sum()
+        )
+        self._nobs = nobs
+        table = bailey_giraitis_critical_values[self._trend, self._frequencies]
+        self._pvalue = float(interp(self._stat, table[:, 1], table[:, 0])) / 100.0
+        critical_values = interp([1.0, 5.0, 10.0], table[::-1, 0], table[::-1, 1])
+        self._critical_values = {
+            "1%": critical_values[0],
+            "5%": critical_values[1],
+            "10%": critical_values[2],
+        }
 
 
 class ZivotAndrews(UnitRootTest, metaclass=AbstractDocStringInheritor):
