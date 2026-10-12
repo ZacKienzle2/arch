@@ -166,7 +166,7 @@ if __name__ == "__main__":
     ):
         values = quantiles(frequencies, trend, nobs, reps, block, seed)
         rows = ",\n    ".join(
-            f"({percent:.3f}, {value:.6g})"
+            f"({percent:.3f}, {value:#.6g})"
             for percent, value in zip(100 - PERCENTILES, values, strict=True)
         )
         print(f"c = (\n    {rows},\n)")
